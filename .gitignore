@@ -50,3 +50,12 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Specifiv for nvml_pub
+nvml_pub.conf
+build/
+
+compile.txt
+nvimltest.c
+nvml_power_query
+pmu_pub.c
