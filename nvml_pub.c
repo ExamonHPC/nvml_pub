@@ -15,15 +15,18 @@
  #ifndef _GNU_SOURCE
  #define _GNU_SOURCE
  #endif
- 
+ //for true and false:
+ #include <stdbool.h>
  #include <stdio.h>
  #include <stdlib.h>
  #include <signal.h>
  #include <unistd.h>
  #include <string.h>
  #include <time.h>
+ #include <sys/time.h>
  #include <nvml.h>
- #include "mosquitto.h"
+ #include <mosquitto.h>
+ #include <iniparser.h> // Added iniparser include
  
  struct mosquitto* mosq;
  int keepRunning;
@@ -44,7 +47,18 @@ typedef struct {
     unsigned long bar1Total;
 } GpuMetrics;
 
-void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq);
+// Updated macro to match the simpler format: topic value:timestamp
+#define PUB_METRIC(type, name, value, id, format) do { \
+    sprintf(topic, "%s/%d/%s", type, id, name); \
+    sprintf(data, format ";%s", value, timestamp); \
+    if(mosquitto_publish(mosq, NULL, topic, strlen(data), data, 0, false) != MOSQ_ERR_SUCCESS) { \
+        if (fp) fprintf(fp, "[MQTT]: Warning: cannot send message.\n"); \
+    } \
+    if (fp) fprintf(fp, "%s %s\n", topic, data); \
+} while(0)
+
+
+void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq, char *base_topic);
 void sig_handler(int sig);
 void get_timestamp(char *buf);
 void usage();
@@ -119,14 +133,15 @@ int gather_gpu_metrics(nvmlDevice_t device, unsigned int deviceIndex, GpuMetrics
 }
 
 // Publish metrics for all GPU devices
-void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq) {
+void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq, char *base_topic) {
     unsigned int deviceCount, i;
     nvmlReturn_t result;
     nvmlDevice_t *devices;
     GpuMetrics *allMetrics;
-    char topic[128];
-    char message[256];
+    char topic[256];
+    char data[512];
     char timestamp[32];
+    FILE *fp = NULL;
     
     // Get the number of GPU devices
     result = nvmlDeviceGetCount(&deviceCount);
@@ -163,50 +178,42 @@ void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq) {
     // Generate common timestamp for all metrics
     get_timestamp(timestamp);
     
-    // Publish all metrics
+    // Open log file for debug output, similar to pmu_pub
+    #ifdef DEBUG
+    fp = fopen("nvml_pub.log", "a");
+    #endif
+    
+    // Publish all metrics using the simpler format: value:timestamp
     for (i = 0; i < deviceCount; i++) {
         // GPU utilization
-        snprintf(topic, sizeof(topic), "gpu/%d/utilization", i);
-        snprintf(message, sizeof(message), "{ \"value\": %u, \"timestamp\": %s }", 
-                allMetrics[i].gpuUtilization, timestamp);
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, false);
+        PUB_METRIC("gpu", "utilization", allMetrics[i].gpuUtilization, i, "%u");
         
         // Memory utilization
-        snprintf(topic, sizeof(topic), "gpu/%d/memory_utilization", i);
-        snprintf(message, sizeof(message), "{ \"value\": %u, \"timestamp\": %s }", 
-                allMetrics[i].memoryUtilization, timestamp);
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, false);
+        PUB_METRIC("gpu", "memory_utilization", allMetrics[i].memoryUtilization, i, "%u");
         
-        // Memory used
-        snprintf(topic, sizeof(topic), "gpu/%d/memory_used", i);
-        snprintf(message, sizeof(message), "{ \"value\": %lu, \"total\": %lu, \"timestamp\": %s }", 
-                allMetrics[i].usedMemory, allMetrics[i].totalMemory, timestamp);
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, false);
+        // Memory metrics - publish each separately
+        PUB_METRIC("gpu", "memory_used", allMetrics[i].usedMemory, i, "%lu");
+        PUB_METRIC("gpu", "memory_total", allMetrics[i].totalMemory, i, "%lu");
+        PUB_METRIC("gpu", "memory_free", allMetrics[i].freeMemory, i, "%lu");
         
         // Temperature
-        snprintf(topic, sizeof(topic), "gpu/%d/temperature", i);
-        snprintf(message, sizeof(message), "{ \"value\": %u, \"timestamp\": %s }", 
-                allMetrics[i].temperature, timestamp);
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, false);
+        PUB_METRIC("gpu", "temperature", allMetrics[i].temperature, i, "%u");
         
-        // Power usage
-        snprintf(topic, sizeof(topic), "gpu/%d/power", i);
-        snprintf(message, sizeof(message), "{ \"value\": %u, \"timestamp\": %s }", 
-                allMetrics[i].powerUsage, timestamp);
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, false);
+        // Power usage (in milliwatts, convert to watts)
+        PUB_METRIC("gpu", "power", allMetrics[i].powerUsage / 1000, i, "%u");
         
         // Performance state
-        snprintf(topic, sizeof(topic), "gpu/%d/pstate", i);
-        snprintf(message, sizeof(message), "{ \"value\": %d, \"timestamp\": %s }", 
-                allMetrics[i].performanceState, timestamp);
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, false);
+        PUB_METRIC("gpu", "pstate", allMetrics[i].performanceState, i, "%d");
         
-        // BAR1 memory
-        snprintf(topic, sizeof(topic), "gpu/%d/bar1_memory", i);
-        snprintf(message, sizeof(message), "{ \"used\": %lu, \"total\": %lu, \"timestamp\": %s }", 
-                allMetrics[i].bar1Used, allMetrics[i].bar1Total, timestamp);
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, false);
+        // BAR1 memory - publish separately
+        PUB_METRIC("gpu", "bar1_used", allMetrics[i].bar1Used, i, "%lu");
+        PUB_METRIC("gpu", "bar1_total", allMetrics[i].bar1Total, i, "%lu");
+        
+
     }
+    
+    // Close log file if opened
+    if (fp) fclose(fp);
     
     // Free allocated memory
     free(devices);
@@ -226,11 +233,14 @@ void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq) {
  
  void usage() {
      printf("nvml_pub: NVIDIA GPU metrics plugin\n\n");
-     printf("Usage: nvml_pub [-h] [-b BROKER] [-p PORT] [-t TOPIC]\n");
-     printf("  -h          Show this help message and exit\n");
-     printf("  -b BROKER   IP address of the MQTT broker\n");
-     printf("  -p PORT     Port of the MQTT broker\n");
-     printf("  -t TOPIC    Output topic\n");
+     printf("Usage: nvml_pub [-h] [-b BROKER] [-p PORT] [-t TOPIC] [-s INTERVAL]\n");
+     printf("  -h                    Show this help message and exit\n");
+     printf("  -b BROKER             IP address of the MQTT broker\n");
+     printf("  -p PORT               Port of the MQTT broker\n");
+     printf("  -t TOPIC              Output topic\n");
+     printf("  -s INTERVAL           Sampling interval in seconds\n");
+     printf("  -c                    Enable or disable extra metrics\n");
+     printf("  -v                    Print version number\n");
      exit(0);
  }
  
@@ -242,8 +252,41 @@ void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq) {
      nvmlReturn_t nvmlResult;
      nvmlDevice_t device;
      char timestamp[64];
+     float samplingInterval = 5.0;
+     int extraMetrics = 1;
+     char hostname[256];
+     dictionary *ini;
+     char tmpstr[256];
+     char* conffile = "nvml_pub.conf";
+     FILE *fp = stderr;
  
-     // Parse command line arguments
+     // Load configuration from file if available
+     fprintf(fp, "Using configuration in file: %s\n", conffile);
+     ini = iniparser_load(conffile);
+     if (ini == NULL) {
+         // Try to load from /etc/
+         strcpy(tmpstr, "/etc/");
+         strcat(tmpstr, conffile);
+         ini = iniparser_load(tmpstr);
+         if (ini == NULL) {
+             fprintf(fp, "Cannot parse file: %s, using defaults\n", conffile);
+         }
+     }
+ 
+     // If we have a config file, dump it and load values
+     if (ini != NULL) {
+         fprintf(fp, "\nConf file parameters:\n\n");
+         iniparser_dump(ini, stderr);
+         
+         // Get values from config file
+         brokerHost = strdup(iniparser_getstring(ini, "MQTT:brokerHost", brokerHost));
+         brokerPort = iniparser_getint(ini, "MQTT:brokerPort", brokerPort);
+         topic = strdup(iniparser_getstring(ini, "MQTT:topic", topic));
+         samplingInterval = iniparser_getdouble(ini, "Sampling:interval", samplingInterval);
+         extraMetrics = iniparser_getboolean(ini, "Sampling:extraMetrics", extraMetrics);
+     }
+ 
+     // Parse command line arguments (override config file)
      for (int i = 1; i < argc; i++) {
          if (strcmp(argv[i], "-h") == 0) {
              usage();
@@ -253,8 +296,23 @@ void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq) {
              brokerPort = atoi(argv[++i]);
          } else if (strcmp(argv[i], "-t") == 0) {
              topic = argv[++i];
+         } else if (strcmp(argv[i], "-s") == 0) {
+             samplingInterval = atof(argv[++i]);
+         } else if (strcmp(argv[i], "-c") == 0) {
+             extraMetrics = atoi(argv[++i]);
+         } else if (strcmp(argv[i], "-v") == 0) {
+             printf("Version: %s\n", version);
+             exit(0);
          }
      }
+ 
+     // Get hostname for use in topic structure if needed
+     if (gethostname(hostname, 255) != 0) {
+         fprintf(fp, "Cannot get hostname.\n");
+         exit(EXIT_FAILURE);
+     }
+     hostname[255] = '\0';
+     printf("Hostname: %s\n", hostname);
  
      // Initialize NVML
      nvmlResult = nvmlInit();
@@ -301,9 +359,9 @@ void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq) {
          get_timestamp(timestamp);
          printf("[%s] Publishing GPU metrics...\n", timestamp);
  
-         publish_gpu_metrics(device, mosq);
+         publish_gpu_metrics(device, mosq, topic);
  
-         sleep(5); // Adjust the sleep duration as needed
+         sleep(samplingInterval); // Using the configured sampling interval
      }
  
      // Cleanup
@@ -311,6 +369,11 @@ void publish_gpu_metrics(nvmlDevice_t device, struct mosquitto *mosq) {
      mosquitto_destroy(mosq);
      mosquitto_lib_cleanup();
      nvmlShutdown();
+     
+     // Free iniparser dictionary if used
+     if (ini != NULL) {
+         iniparser_freedict(ini);
+     }
  
      printf("Exiting...\n");
      return 0;
