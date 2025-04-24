@@ -54,8 +54,16 @@ dkms.conf
 # Specifiv for nvml_pub
 nvml_pub.conf
 build/
+venv
+C/
 
 compile.txt
 nvimltest.c
 nvml_power_query
 pmu_pub.c
+
+venv/
+
+*.log
+*.log.*
+*.lock

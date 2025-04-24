@@ -1,0 +1,13 @@
+[Unit]
+Description=nvml_pub Service
+After=network.target
+
+[Service]
+Type=simple
+User=examon
+ExecStart=/home/examon/venv/bin/python /home/examon/nvml_pub/nvml_pub.py run
+Restart=on-failure
+WorkingDirectory=/home/examon/nvml_pub/
+
+[Install]
+WantedBy=multi-user.target  
