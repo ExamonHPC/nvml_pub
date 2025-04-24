@@ -1,4 +1,4 @@
-# NVIDIA GPU Metrics to MQTT Publisher (NVML)
+# NVIDIA Management Library plugin for EXAMON
 
 This script instantiates a service that collects NVIDIA GPU metrics using the NVIDIA Management Library (NVML) and publishes the data to an MQTT broker. The metrics include GPU utilization, memory utilization, temperature, power usage, and memory consumption.
 
