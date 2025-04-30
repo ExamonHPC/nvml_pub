@@ -80,6 +80,15 @@ class Sensor:
                 'measurements': ['bar1_Used'],
                 'values': [bar1_info.bar1Used]
             })
+            payload.append({
+                'sensor_name': f"bar1_Free",
+                'id': str(device_id),
+                'value': bar1_info.bar1Free,
+                'device': device_name,
+                'timestamp': timestamp,
+                'measurements': ['bar1_Free'],
+                'values': [bar1_info.bar1Free]
+            })
             
             # Clock speeds
             try:
