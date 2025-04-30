@@ -48,6 +48,74 @@ class Sensor:
             handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
             device_name = f"{mqtt_tpc_dev}.gpu{device_id}"
             
+            # Performance state
+            perfstate = pynvml.nvmlDeviceGetPerformanceState(handle)
+            payload.append({
+                'sensor_name': f"perf_state",
+                'id': str(device_id),
+                'value': perfstate,
+                'device': device_name,
+                'timestamp': timestamp,
+                'measurements': ['perf_state'],
+                'values': [perfstate]
+            })
+            
+            # BAR1 memory info
+            bar1_info = pynvml.nvmlDeviceGetBAR1MemoryInfo(handle)
+            payload.append({
+                'sensor_name': f"bar1_Total",
+                'id': str(device_id),
+                'value': bar1_info.bar1Total,
+                'device': device_name,
+                'timestamp': timestamp,
+                'measurements': ['bar1_Total'],
+                'values': [bar1_info.bar1Total]
+            })
+            payload.append({
+                'sensor_name': f"bar1_Used",
+                'id': str(device_id),
+                'value': bar1_info.bar1Used,
+                'device': device_name,
+                'timestamp': timestamp,
+                'measurements': ['bar1_Used'],
+                'values': [bar1_info.bar1Used]
+            })
+            
+            # Clock speeds
+            try:
+                graphics_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS)
+                memory_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM)
+                sm_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM)
+            except:
+                graphics_clock = memory_clock = sm_clock = 0
+            payload.append({
+                'sensor_name': f"graphics_clock",
+                'id': str(device_id),
+                'value': graphics_clock,
+                'device': device_name,
+                'timestamp': timestamp,
+                'measurements': ['graphics_clock'],
+                'values': [graphics_clock]
+            })
+            payload.append({
+                'sensor_name': f"memory_clock",
+                'id': str(device_id),
+                'value': memory_clock,
+                'device': device_name,
+                'timestamp': timestamp,
+                'measurements': ['memory_clock'],
+                'values': [memory_clock]
+            })
+            payload.append({
+                'sensor_name': f"sm_clock",
+                'id': str(device_id),
+                'value': sm_clock,
+                'device': device_name,
+                'timestamp': timestamp,
+                'measurements': ['sm_clock'],
+                'values': [sm_clock]
+            })
+
             # GPU utilization
             utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
             payload.append({
@@ -127,7 +195,6 @@ def read_data(sr):
         metric['value'] = raw_data['value']
         metric['timestamp'] = timestamp
         metric['tags'] = sr.get_tags()
-        # dynamically add new custom tags
         metric['tags']['id'] = str(f"gpu_{raw_data['id']}")
         # build the final packet
         examon_data.append(metric)
