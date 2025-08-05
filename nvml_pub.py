@@ -139,12 +139,12 @@ class Sensor:
             
             # Memory utilization
             payload.append({
-                'sensor_name': f"mem_util",
+                'sensor_name': f"mem_controller_util",
                 'id': str(device_id),
                 'value': utilization.memory,
                 'device': device_name,
                 'timestamp': timestamp,
-                'measurements': ['mem_util'],
+                'measurements': ['mem_controller_util'],
                 'values': [utilization.memory]
             })
             
