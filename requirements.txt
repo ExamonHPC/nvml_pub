@@ -1,1 +1,2 @@
 pynvml  # Need to import pynvml for NVIDIA Management Library
+setuptools  # Required for building C extension module

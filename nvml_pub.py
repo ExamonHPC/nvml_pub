@@ -2,9 +2,17 @@ import json
 import time
 import random
 import pynvml  # Need to import pynvml for NVIDIA Management Library
-
 from examon.plugin.examonapp import ExamonApp
 from examon.plugin.sensorreader import SensorReader
+
+# Import GPM extension module
+try:
+    import nvml_gpm_extension
+    GPM_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: GPM extension not available: {e}")
+    print("Build it with: python setup.py build_ext --inplace")
+    GPM_AVAILABLE = False
 
 
 class Sensor:
@@ -48,6 +56,25 @@ class Sensor:
             handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
             device_name = f"{mqtt_tpc_dev}.gpu{device_id}"
             
+            # GPU Performance Metrics using C extension
+            if GPM_AVAILABLE:
+                try:
+                    gpm_metrics = nvml_gpm_extension.get_gpm_metrics(device_id)
+                    # Add all GPM metrics to payload
+                    for metric_name, metric_value in gpm_metrics.items():
+                        payload.append({
+                            'sensor_name': metric_name,
+                            'id': str(device_id),
+                            'value': metric_value,
+                            'device': device_name,
+                            'timestamp': timestamp,
+                            'measurements': [metric_name],
+                            'values': [metric_value]
+                        })
+                except Exception as e:
+                    pass  # GPM not supported on this device
+
+
             # Performance state
             perfstate = pynvml.nvmlDeviceGetPerformanceState(handle)
             payload.append({
