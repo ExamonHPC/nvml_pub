@@ -17,11 +17,12 @@ except ImportError as e:
 
 
 class Sensor:
-    def __init__(self, sensor_name='nvml_pub', range_min=0, range_max=100.0, device_id=None):
+    def __init__(self, sensor_name='nvml_pub', range_min=0, range_max=100.0, device_id=None, metrics_to_monitor=None):
         self.sensor_name = sensor_name
         self.range_min = range_min
         self.range_max = range_max
         self.device_id = device_id  # None means all devices, otherwise single device
+        self.metrics_to_monitor = metrics_to_monitor
         # Initialize NVML
         try:
             pynvml.nvmlInit()
@@ -65,162 +66,84 @@ class Sensor:
         for device_id in device_range:
             handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
             device_name = f"{mqtt_tpc_dev}.gpu{device_id}"
-            
+
+            def add_metric(m_name, m_value):
+                payload.append({
+                    'sensor_name': m_name,
+                    'id': str(device_id),
+                    'value': m_value,
+                    'device': device_name,
+                    'timestamp': timestamp,
+                    'measurements': [m_name],
+                    'values': [m_value]
+                })
+
             # GPU Performance Metrics using C extension
             if GPM_AVAILABLE:
                 try:
                     gpm_metrics = nvml_gpm_extension.get_gpm_metrics(device_id)
-                    # Add all GPM metrics to payload
+                    # Add GPM metrics to payload if monitored
                     for metric_name, metric_value in gpm_metrics.items():
-                        payload.append({
-                            'sensor_name': metric_name,
-                            'id': str(device_id),
-                            'value': metric_value,
-                            'device': device_name,
-                            'timestamp': timestamp,
-                            'measurements': [metric_name],
-                            'values': [metric_value]
-                        })
+                        if self.metrics_to_monitor is None or metric_name in self.metrics_to_monitor:
+                            add_metric(metric_name, metric_value)
                 except Exception as e:
                     pass  # GPM not supported on this device
 
 
             # Performance state
-            perfstate = pynvml.nvmlDeviceGetPerformanceState(handle)
-            payload.append({
-                'sensor_name': f"perf_state",
-                'id': str(device_id),
-                'value': perfstate,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['perf_state'],
-                'values': [perfstate]
-            })
+            if self.metrics_to_monitor is None or 'perf_state' in self.metrics_to_monitor:
+                perfstate = pynvml.nvmlDeviceGetPerformanceState(handle)
+                add_metric("perf_state", perfstate)
             
             # BAR1 memory info
-            bar1_info = pynvml.nvmlDeviceGetBAR1MemoryInfo(handle)
-            payload.append({
-                'sensor_name': f"bar1_Total",
-                'id': str(device_id),
-                'value': bar1_info.bar1Total,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['bar1_Total'],
-                'values': [bar1_info.bar1Total]
-            })
-            payload.append({
-                'sensor_name': f"bar1_Used",
-                'id': str(device_id),
-                'value': bar1_info.bar1Used,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['bar1_Used'],
-                'values': [bar1_info.bar1Used]
-            })
-            payload.append({
-                'sensor_name': f"bar1_Free",
-                'id': str(device_id),
-                'value': bar1_info.bar1Free,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['bar1_Free'],
-                'values': [bar1_info.bar1Free]
-            })
+            if self.metrics_to_monitor is None or any(m in self.metrics_to_monitor for m in ['bar1_Total', 'bar1_Used', 'bar1_Free']):
+                bar1_info = pynvml.nvmlDeviceGetBAR1MemoryInfo(handle)
+                if self.metrics_to_monitor is None or 'bar1_Total' in self.metrics_to_monitor:
+                    add_metric("bar1_Total", bar1_info.bar1Total)
+                if self.metrics_to_monitor is None or 'bar1_Used' in self.metrics_to_monitor:
+                    add_metric("bar1_Used", bar1_info.bar1Used)
+                if self.metrics_to_monitor is None or 'bar1_Free' in self.metrics_to_monitor:
+                    add_metric("bar1_Free", bar1_info.bar1Free)
             
             # Clock speeds
-            try:
-                graphics_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS)
-                memory_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM)
-                sm_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM)
-            except:
-                graphics_clock = memory_clock = sm_clock = 0
-            payload.append({
-                'sensor_name': f"graphics_clock",
-                'id': str(device_id),
-                'value': graphics_clock,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['graphics_clock'],
-                'values': [graphics_clock]
-            })
-            payload.append({
-                'sensor_name': f"memory_clock",
-                'id': str(device_id),
-                'value': memory_clock,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['memory_clock'],
-                'values': [memory_clock]
-            })
-            payload.append({
-                'sensor_name': f"sm_clock",
-                'id': str(device_id),
-                'value': sm_clock,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['sm_clock'],
-                'values': [sm_clock]
-            })
+            if self.metrics_to_monitor is None or any(m in self.metrics_to_monitor for m in ['graphics_clock', 'memory_clock', 'sm_clock']):
+                try:
+                    graphics_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS)
+                    memory_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_MEM)
+                    sm_clock = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_SM)
+                except:
+                    graphics_clock = memory_clock = sm_clock = 0
+                    
+                if self.metrics_to_monitor is None or 'graphics_clock' in self.metrics_to_monitor:
+                    add_metric("graphics_clock", graphics_clock)
+                if self.metrics_to_monitor is None or 'memory_clock' in self.metrics_to_monitor:
+                    add_metric("memory_clock", memory_clock)
+                if self.metrics_to_monitor is None or 'sm_clock' in self.metrics_to_monitor:
+                    add_metric("sm_clock", sm_clock)
 
             # GPU utilization
-            utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            payload.append({
-                'sensor_name': f"gpu_util",
-                'id': str(device_id),
-                'value': utilization.gpu,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['gpu_util'],
-                'values': [utilization.gpu]
-            })
-            
-            # Memory utilization
-            payload.append({
-                'sensor_name': f"mem_controller_util",
-                'id': str(device_id),
-                'value': utilization.memory,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['mem_controller_util'],
-                'values': [utilization.memory]
-            })
+            if self.metrics_to_monitor is None or any(m in self.metrics_to_monitor for m in ['gpu_util', 'mem_controller_util']):
+                utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                if self.metrics_to_monitor is None or 'gpu_util' in self.metrics_to_monitor:
+                    add_metric("gpu_util", utilization.gpu)
+                if self.metrics_to_monitor is None or 'mem_controller_util' in self.metrics_to_monitor:
+                    add_metric("mem_controller_util", utilization.memory)
             
             # Temperature
-            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
-            payload.append({
-                'sensor_name': f"temp",
-                'id': str(device_id),
-                'value': temp,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['temp'],
-                'values': [temp]
-            })
+            if self.metrics_to_monitor is None or 'temp' in self.metrics_to_monitor:
+                temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+                add_metric("temp", temp)
             
             # Power usage
-            power = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0  # convert mW to W
-            payload.append({
-                'sensor_name': f"power",
-                'id': str(device_id),
-                'value': power,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['power'],
-                'values': [power]
-            })
+            if self.metrics_to_monitor is None or 'power' in self.metrics_to_monitor:
+                power = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0  # convert mW to W
+                add_metric("power", power)
             
             # Memory info
-            memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            mem_used_mb = memory.used / (1024 * 1024)  # convert to MB
-            payload.append({
-                'sensor_name': f"mem_used",
-                'id': str(device_id),
-                'value': mem_used_mb,
-                'device': device_name,
-                'timestamp': timestamp,
-                'measurements': ['mem_used'],
-                'values': [mem_used_mb]
-            })
+            if self.metrics_to_monitor is None or 'mem_used' in self.metrics_to_monitor:
+                memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                mem_used_mb = memory.used / (1024 * 1024)  # convert to MB
+                add_metric("mem_used", mem_used_mb)
         return payload
     
     def read_data(self):
@@ -245,7 +168,13 @@ def _parse_mqtt_topic_to_tags(topic):
 def read_data(sr):
     # get timestamp and data 
     timestamp = int(time.time()*1000)
+    
+    t_start = time.time()
     raw_packet = sr.sensor.get_sensor_data()
+    t_end = time.time()
+    
+    if sr.conf.get('LOG_LEVEL', 'INFO').upper() == 'DEBUG':
+        sr.logger.debug(f"Retrieved {len(raw_packet)} metrics from NVML in {(t_end - t_start):.4f} seconds.")
     
     # build the examon metric
     examon_data = []
@@ -269,8 +198,16 @@ def worker(conf, tags, device_id=None):
         Worker process code
         If device_id is provided, this worker handles only that GPU
     """
+    
+    # read metrics from conf
+    metrics_str = conf.get('METRICS', '')
+    if metrics_str:
+        metrics_to_monitor = [m.strip() for m in metrics_str.split(',') if m.strip()]
+    else:
+        metrics_to_monitor = None
+        
     # sensor instance 
-    sensor = Sensor(device_id=device_id)
+    sensor = Sensor(device_id=device_id, metrics_to_monitor=metrics_to_monitor)
     
     # SensorReader app
     sr = SensorReader(conf, sensor)
