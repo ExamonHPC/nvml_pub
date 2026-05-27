@@ -1,6 +1,7 @@
 import json
 import time
 import random
+from collections import OrderedDict
 import pynvml  # Need to import pynvml for NVIDIA Management Library
 from examon.plugin.examonapp import ExamonApp
 from examon.plugin.sensorreader import SensorReader
@@ -16,10 +17,11 @@ except ImportError as e:
 
 
 class Sensor:
-    def __init__(self, sensor_name='nvml_pub', range_min=0, range_max=100.0):
+    def __init__(self, sensor_name='nvml_pub', range_min=0, range_max=100.0, device_id=None):
         self.sensor_name = sensor_name
         self.range_min = range_min
         self.range_max = range_max
+        self.device_id = device_id  # None means all devices, otherwise single device
         # Initialize NVML
         try:
             pynvml.nvmlInit()
@@ -52,7 +54,15 @@ class Sensor:
         timestamp = int(time.time() * 1000)
         mqtt_tpc_dev = self.sensor_name
         
-        for device_id in range(self.device_count):
+        # Determine which devices to query
+        if self.device_id is not None:
+            # Single device mode
+            device_range = [self.device_id]
+        else:
+            # All devices mode
+            device_range = range(self.device_count)
+        
+        for device_id in device_range:
             handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
             device_name = f"{mqtt_tpc_dev}.gpu{device_id}"
             
@@ -216,9 +226,23 @@ class Sensor:
     def read_data(self):
         return self.get_sensor_data()
 
+def _parse_mqtt_topic_to_tags(topic):
+    """Build tags from MQTT_TOPIC in dotted key/value form."""
+    tags = OrderedDict()
+    if not topic:
+        return tags
+
+    parts = [p for p in topic.split('.') if p]
+    if len(parts) >= 2 and len(parts) % 2 == 0:
+        for idx in range(0, len(parts), 2):
+            tags[parts[idx]] = parts[idx + 1]
+    else:
+        # Fallback: treat the whole topic as the root tag value.
+        tags['root'] = topic
+
+    return tags
 
 def read_data(sr):
-    
     # get timestamp and data 
     timestamp = int(time.time()*1000)
     raw_packet = sr.sensor.get_sensor_data()
@@ -238,15 +262,15 @@ def read_data(sr):
     # worker id (string) useful for debug/log
     worker_id = sr.sensor.sensor_name
       
-    return (worker_id, examon_data,)
-        
+    return (worker_id, examon_data,)    
                 
-def worker(conf, tags):
+def worker(conf, tags, device_id=None):
     """
         Worker process code
+        If device_id is provided, this worker handles only that GPU
     """
     # sensor instance 
-    sensor = Sensor()
+    sensor = Sensor(device_id=device_id)
     
     # SensorReader app
     sr = SensorReader(conf, sensor)
@@ -271,14 +295,22 @@ if __name__ == '__main__':
     print("Config:")
     print(json.dumps(app.conf, indent=4))
 
-    # set default metrics tags
+    # set default metrics tags from config
     tags = app.examon_tags()
-    tags['root']      = 'theta'
-    tags['plugin']   = 'nvml_pub'
+    tags.update(_parse_mqtt_topic_to_tags(app.conf.get('MQTT_TOPIC')))
+    if 'plugin' not in tags:
+        tags['plugin'] = 'nvml_pub'
     # tags['chnl']     = 'data'
-  
-    # add a worker
-    app.add_worker(worker, app.conf, tags)
+
+    
+    pynvml.nvmlInit()
+    device_count = pynvml.nvmlDeviceGetCount()
+    pynvml.nvmlShutdown()
+
+    print(f"Detected {device_count} GPU(s). Creating one worker per GPU.")
+    # Add one worker per GPU
+    for device_id in range(device_count):
+        app.add_worker(worker, app.conf, tags, device_id)
     
     # run!
     app.run()
